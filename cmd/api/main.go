@@ -67,9 +67,14 @@ func main() {
 	}
 
 	s3Config := storage.LoadConfig()
-	objectStore, err := storage.NewClient(s3Config)
-	if err != nil {
-		slog.Warn("object storage unavailable, file uploads disabled", "error", err)
+	var objectStore attachments.ObjectStore
+	if s3Config.Enabled() {
+		client, err := storage.NewClient(s3Config)
+		if err != nil {
+			slog.Warn("object storage unavailable, file uploads disabled", "error", err)
+		} else {
+			objectStore = client
+		}
 	}
 
 	queries := db.New(pool)

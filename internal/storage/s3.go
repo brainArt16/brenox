@@ -11,26 +11,34 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 type Config struct {
-	Endpoint  string
-	Bucket    string
-	AccessKey string
-	SecretKey string
-	Region    string
-	UseSSL    bool
+	Endpoint       string
+	PublicEndpoint string
+	Bucket         string
+	AccessKey      string
+	SecretKey      string
+	Region         string
+	UseSSL         bool
 }
 
 func LoadConfig() Config {
 	useSSL := strings.EqualFold(os.Getenv("S3_USE_SSL"), "true")
+	endpoint := strings.TrimSpace(os.Getenv("S3_ENDPOINT"))
+	publicEndpoint := strings.TrimSpace(os.Getenv("S3_PUBLIC_ENDPOINT"))
+	if publicEndpoint == "" {
+		publicEndpoint = endpoint
+	}
 	return Config{
-		Endpoint:  strings.TrimSpace(os.Getenv("S3_ENDPOINT")),
-		Bucket:    strings.TrimSpace(os.Getenv("S3_BUCKET")),
-		AccessKey: strings.TrimSpace(os.Getenv("S3_ACCESS_KEY")),
-		SecretKey: strings.TrimSpace(os.Getenv("S3_SECRET_KEY")),
-		Region:    envOr("S3_REGION", "us-east-1"),
-		UseSSL:    useSSL,
+		Endpoint:       endpoint,
+		PublicEndpoint: publicEndpoint,
+		Bucket:         strings.TrimSpace(os.Getenv("S3_BUCKET")),
+		AccessKey:      strings.TrimSpace(os.Getenv("S3_ACCESS_KEY")),
+		SecretKey:      strings.TrimSpace(os.Getenv("S3_SECRET_KEY")),
+		Region:         envOr("S3_REGION", "us-east-1"),
+		UseSSL:         useSSL,
 	}
 }
 
@@ -39,8 +47,8 @@ func (c Config) Enabled() bool {
 }
 
 type Client struct {
-	bucket string
-	client *s3.Client
+	bucket  string
+	client  *s3.Client
 	presign *s3.PresignClient
 }
 
@@ -49,6 +57,48 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("S3 storage is not configured")
 	}
 
+	internal, err := newS3Client(cfg, cfg.Endpoint)
+	if err != nil {
+		return nil, err
+	}
+
+	presignEndpoint := cfg.PublicEndpoint
+	if strings.TrimSpace(presignEndpoint) == "" {
+		presignEndpoint = cfg.Endpoint
+	}
+	presignClient := internal
+	if !strings.EqualFold(presignEndpoint, cfg.Endpoint) {
+		presignClient, err = newS3Client(cfg, presignEndpoint)
+		if err != nil {
+			return nil, fmt.Errorf("public S3 client: %w", err)
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	_, err = internal.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(cfg.Bucket)})
+	if err != nil {
+		_, createErr := internal.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(cfg.Bucket)})
+		if createErr != nil {
+			return nil, fmt.Errorf("ensure bucket %s: %w", cfg.Bucket, createErr)
+		}
+	}
+
+	if err := ensureBrowserCORS(ctx, internal, cfg.Bucket); err != nil {
+		// Some MinIO builds return 501 for PutBucketCors; browser CORS can
+		// still be set via MINIO_API_CORS_ALLOW_ORIGIN on the MinIO service.
+		fmt.Printf("warning: bucket CORS not applied via S3 API: %v\n", err)
+	}
+
+	return &Client{
+		bucket:  cfg.Bucket,
+		client:  internal,
+		presign: s3.NewPresignClient(presignClient),
+	}, nil
+}
+
+func newS3Client(cfg Config, endpoint string) (*s3.Client, error) {
 	scheme := "http"
 	if cfg.UseSSL {
 		scheme = "https"
@@ -56,7 +106,7 @@ func NewClient(cfg Config) (*Client, error) {
 
 	resolver := aws.EndpointResolverWithOptionsFunc(func(service, region string, _ ...any) (aws.Endpoint, error) {
 		return aws.Endpoint{
-			URL:               fmt.Sprintf("%s://%s", scheme, cfg.Endpoint),
+			URL:               fmt.Sprintf("%s://%s", scheme, endpoint),
 			HostnameImmutable: true,
 		}, nil
 	})
@@ -67,26 +117,27 @@ func NewClient(cfg Config) (*Client, error) {
 		EndpointResolverWithOptions: resolver,
 	}
 
-	s3Client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
+	return s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.UsePathStyle = true
+	}), nil
+}
+
+func ensureBrowserCORS(ctx context.Context, client *s3.Client, bucket string) error {
+	_, err := client.PutBucketCors(ctx, &s3.PutBucketCorsInput{
+		Bucket: aws.String(bucket),
+		CORSConfiguration: &types.CORSConfiguration{
+			CORSRules: []types.CORSRule{
+				{
+					AllowedHeaders: []string{"*"},
+					AllowedMethods: []string{"GET", "PUT", "HEAD"},
+					AllowedOrigins: []string{"*"},
+					ExposeHeaders:  []string{"ETag", "Content-Length", "Content-Type"},
+					MaxAgeSeconds:  aws.Int32(3600),
+				},
+			},
+		},
 	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	_, err := s3Client.HeadBucket(ctx, &s3.HeadBucketInput{Bucket: aws.String(cfg.Bucket)})
-	if err != nil {
-		_, createErr := s3Client.CreateBucket(ctx, &s3.CreateBucketInput{Bucket: aws.String(cfg.Bucket)})
-		if createErr != nil {
-			return nil, fmt.Errorf("ensure bucket %s: %w", cfg.Bucket, createErr)
-		}
-	}
-
-	return &Client{
-		bucket:  cfg.Bucket,
-		client:  s3Client,
-		presign: s3.NewPresignClient(s3Client),
-	}, nil
+	return err
 }
 
 func (c *Client) PresignPut(ctx context.Context, key, contentType string, size int64) (string, time.Time, error) {
