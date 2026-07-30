@@ -146,7 +146,8 @@ WHERE app_id = $1
 SELECT *
 FROM app_users
 WHERE app_id = $1
-  AND user_id = $2;
+  AND user_id = $2
+  AND environment = $3;
 
 -- name: CreateWebhook :one
 INSERT INTO webhooks (

@@ -16,6 +16,7 @@ import (
 	"github.com/brainart16/brenox/internal/webhooks"
 	brenoxjwt "github.com/brainart16/brenox/pkg/jwt"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
@@ -141,29 +142,12 @@ func (s *Service) ProvisionUser(ctx context.Context, runtime RuntimeApp, req Pro
 		username = fmt.Sprintf("%s_%s", runtime.App.Slug, externalID)
 	}
 
-	password, err := randomPassword()
-	if err != nil {
-		return UserResponse{}, err
-	}
-	hashed, err := auth.HashPassword(password)
+	user, created, err := s.resolveOrCreateProvisionedUser(ctx, email, username)
 	if err != nil {
 		return UserResponse{}, err
 	}
 
-	user, err := s.queries.CreateUser(ctx, db.CreateUserParams{
-		Email:        email,
-		Username:     username,
-		PasswordHash: hashed,
-	})
-	if err != nil {
-		return UserResponse{}, err
-	}
-
-	if err := s.queries.AddWorkspaceMember(ctx, db.AddWorkspaceMemberParams{
-		WorkspaceID: runtime.WorkspaceID,
-		UserID:      user.ID,
-		Role:        "member",
-	}); err != nil {
+	if err := s.ensureWorkspaceMember(ctx, runtime.WorkspaceID, user.ID); err != nil {
 		return UserResponse{}, err
 	}
 
@@ -173,12 +157,94 @@ func (s *Service) ProvisionUser(ctx context.Context, runtime RuntimeApp, req Pro
 		ExternalID:  externalID,
 		Environment: runtime.Environment,
 	}); err != nil {
+		if isUniqueViolation(err) {
+			// Already linked for this environment (external_id or user_id race).
+			if linked, linkErr := s.queries.GetAppUserByExternalID(ctx, db.GetAppUserByExternalIDParams{
+				AppID:       runtime.App.ID,
+				ExternalID:  externalID,
+				Environment: runtime.Environment,
+			}); linkErr == nil {
+				linkedUser, getErr := s.queries.GetUserByID(ctx, linked.UserID)
+				if getErr != nil {
+					return UserResponse{}, getErr
+				}
+				return toUserResponse(linkedUser, externalID), nil
+			}
+			if linked, linkErr := s.queries.GetAppUserByUserID(ctx, db.GetAppUserByUserIDParams{
+				AppID:       runtime.App.ID,
+				UserID:      user.ID,
+				Environment: runtime.Environment,
+			}); linkErr == nil {
+				// Same platform user already mapped under a different external_id.
+				if linked.ExternalID == externalID {
+					linkedUser, getErr := s.queries.GetUserByID(ctx, linked.UserID)
+					if getErr != nil {
+						return UserResponse{}, getErr
+					}
+					return toUserResponse(linkedUser, externalID), nil
+				}
+				return UserResponse{}, ErrExternalIDTaken
+			}
+			return UserResponse{}, ErrExternalIDTaken
+		}
 		return UserResponse{}, err
 	}
 
 	resp := toUserResponse(user, externalID)
-	s.dispatch(ctx, runtime, "user.provisioned", resp)
+	if created {
+		s.dispatch(ctx, runtime, "user.provisioned", resp)
+	}
 	return resp, nil
+}
+
+func (s *Service) resolveOrCreateProvisionedUser(ctx context.Context, email, username string) (db.User, bool, error) {
+	if existing, err := s.queries.GetUserByEmail(ctx, email); err == nil {
+		return existing, false, nil
+	} else if !errors.Is(err, pgx.ErrNoRows) {
+		return db.User{}, false, err
+	}
+
+	password, err := randomPassword()
+	if err != nil {
+		return db.User{}, false, err
+	}
+	hashed, err := auth.HashPassword(password)
+	if err != nil {
+		return db.User{}, false, err
+	}
+
+	user, err := s.queries.CreateUser(ctx, db.CreateUserParams{
+		Email:        email,
+		Username:     username,
+		PasswordHash: hashed,
+	})
+	if err == nil {
+		return user, true, nil
+	}
+	if !isUniqueViolation(err) {
+		return db.User{}, false, err
+	}
+
+	// Race or stale row: email (or username) already taken — prefer email match.
+	if existing, lookupErr := s.queries.GetUserByEmail(ctx, email); lookupErr == nil {
+		return existing, false, nil
+	}
+	if existing, lookupErr := s.queries.GetUserByUsername(ctx, username); lookupErr == nil {
+		return existing, false, nil
+	}
+	return db.User{}, false, err
+}
+
+func (s *Service) ensureWorkspaceMember(ctx context.Context, workspaceID, userID int64) error {
+	err := s.queries.AddWorkspaceMember(ctx, db.AddWorkspaceMemberParams{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+		Role:        "member",
+	})
+	if err != nil && isUniqueViolation(err) {
+		return nil
+	}
+	return err
 }
 
 func (s *Service) CreateChannel(ctx context.Context, runtime RuntimeApp, req CreateChannelRequest) (ChannelResponse, error) {
@@ -381,18 +447,16 @@ func (s *Service) ListMessages(ctx context.Context, runtime RuntimeApp, channelI
 
 func (s *Service) resolveUserID(ctx context.Context, runtime RuntimeApp, userID int64, externalID string) (int64, error) {
 	if userID > 0 {
-		appUser, err := s.queries.GetAppUserByUserID(ctx, db.GetAppUserByUserIDParams{
-			AppID:  runtime.App.ID,
-			UserID: userID,
+		_, err := s.queries.GetAppUserByUserID(ctx, db.GetAppUserByUserIDParams{
+			AppID:       runtime.App.ID,
+			UserID:      userID,
+			Environment: runtime.Environment,
 		})
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return 0, ErrUserNotFound
 			}
 			return 0, err
-		}
-		if appUser.Environment != runtime.Environment {
-			return 0, ErrUserNotFound
 		}
 		return userID, nil
 	}
@@ -450,6 +514,14 @@ func randomPassword() (string, error) {
 
 func isDuplicateChannelName(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "channels_workspace_name_unique")
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "23505"
+	}
+	return err != nil && strings.Contains(err.Error(), "SQLSTATE 23505")
 }
 
 func (s *Service) GetIdempotency(ctx context.Context, appID int64, key string) ([]byte, int, bool, error) {

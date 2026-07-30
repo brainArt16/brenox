@@ -445,15 +445,17 @@ SELECT id, app_id, user_id, external_id, created_at, environment
 FROM app_users
 WHERE app_id = $1
   AND user_id = $2
+  AND environment = $3
 `
 
 type GetAppUserByUserIDParams struct {
-	AppID  int64
-	UserID int64
+	AppID       int64
+	UserID      int64
+	Environment string
 }
 
 func (q *Queries) GetAppUserByUserID(ctx context.Context, arg GetAppUserByUserIDParams) (AppUser, error) {
-	row := q.db.QueryRow(ctx, getAppUserByUserID, arg.AppID, arg.UserID)
+	row := q.db.QueryRow(ctx, getAppUserByUserID, arg.AppID, arg.UserID, arg.Environment)
 	var i AppUser
 	err := row.Scan(
 		&i.ID,

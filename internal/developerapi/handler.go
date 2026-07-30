@@ -108,6 +108,8 @@ func writeError(c *gin.Context, err error) {
 		c.JSON(http.StatusNotFound, gin.H{"error": httperr.Sanitize(err.Error())})
 	case errors.Is(err, ErrInvalidRequest), errors.Is(err, ErrEmptyContent):
 		c.JSON(http.StatusBadRequest, gin.H{"error": httperr.Sanitize(err.Error())})
+	case errors.Is(err, ErrExternalIDTaken):
+		c.JSON(http.StatusConflict, gin.H{"error": httperr.Sanitize(err.Error())})
 	case errors.Is(err, ErrSandboxLimit):
 		c.JSON(http.StatusForbidden, gin.H{"error": httperr.Sanitize(err.Error())})
 	default:

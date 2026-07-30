@@ -606,6 +606,8 @@ Record architectural decisions here as they are made.
 
 | Date | Change |
 |------|--------|
+| 2026-07-30 | `app_users`: allow same user in live + sandbox (`UNIQUE (app_id, user_id, environment)`); provision recovers unique races; `ErrExternalIDTaken` → 409 |
+| 2026-07-30 | `POST /v1/users`: reuse existing user by email on unique conflict and (re)link `app_users` / workspace membership |
 | 2026-07-07 | Sandbox enforcement: hard caps for test users/channels/messages, stricter sandbox rate limits, sandbox key expiry, TTL cleanup, and HTTPS-only non-localhost origins |
 | 2026-07-07 | Sandbox/live polish: admin `sandbox_workspace_id`, Postman session tests, web docs + console workspace cards |
 | 2026-07-07 | Sandbox/live isolation: dual workspace per app, `key_env` JWT claim, embed workspace guard, sandbox skips billing/webhooks |
