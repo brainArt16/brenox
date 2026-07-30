@@ -1,6 +1,6 @@
 # SDK Integration Guide
 
-Backend reference for official Brenox SDKs (JavaScript, React, Flutter). All behavior documented here is implemented in the server — no undocumented shortcuts required.
+Backend reference for official Brenox SDKs (JavaScript, React, Python, Flutter). All behavior documented here is implemented in the server — no undocumented shortcuts required.
 
 ## Authentication
 
