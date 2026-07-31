@@ -45,6 +45,9 @@ func isMaintenanceBypass(path string) bool {
 		return true
 	case strings.HasPrefix(path, "/api/admin"):
 		return true
+	// Admins must be able to authenticate to turn maintenance mode off.
+	case path == "/auth/login", path == "/auth/refresh":
+		return true
 	default:
 		return false
 	}
