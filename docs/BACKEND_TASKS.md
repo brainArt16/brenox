@@ -606,6 +606,7 @@ Record architectural decisions here as they are made.
 
 | Date | Change |
 |------|--------|
+| 2026-07-31 | Broadcast `message.new` from chat service for REST-created messages (files sent via REST now appear realtime); WS path reuses same broadcast |
 | 2026-07-31 | Attachment downloads via authenticated API content proxy; `url` is `/api/.../content` (not MinIO/S3 path) |
 | 2026-07-30 | S3 uploads: `S3_PUBLIC_ENDPOINT` for browser presigned URLs; tolerate MinIO PutBucketCors 501; avoid nil-store panic; MinIO `MINIO_API_CORS_ALLOW_ORIGIN` |
 | 2026-07-30 | `app_users`: allow same user in live + sandbox (`UNIQUE (app_id, user_id, environment)`); provision recovers unique races; `ErrExternalIDTaken` → 409 |

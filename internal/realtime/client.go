@@ -74,7 +74,7 @@ func (c *Client) handleMessageSend(event Event) {
 		return
 	}
 
-	message, err := c.chat.SendMessage(
+	if _, err := c.chat.SendMessage(
 		context.Background(),
 		c.workspaceID,
 		c.channelID,
@@ -82,13 +82,10 @@ func (c *Client) handleMessageSend(event Event) {
 		content,
 		nil,
 		nil,
-	)
-	if err != nil {
+	); err != nil {
 		c.handleSendMessageError(err)
-		return
 	}
-
-	c.hub.Publish(NewOutboundEvent("message.new", c.workspaceID, c.channelID, chat.MessageNewPayload(*message)))
+	// message.new is broadcast by the chat service for all send paths.
 }
 
 func (c *Client) handleSendMessageError(err error) {

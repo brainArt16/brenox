@@ -122,6 +122,7 @@ func main() {
 
 	chatService := chatHandler.NewService(queries, authzService)
 	chatService.SetNotifier(notificationService)
+	chatService.SetBroadcaster(realtimeHandler.NewChatBroadcaster(hub))
 	chatHandlerInstance := chatHandler.NewHandler(chatService)
 
 	attachmentService := attachments.NewService(

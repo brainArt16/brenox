@@ -6,18 +6,24 @@ import (
 	"strings"
 	"time"
 
-	db "github.com/brainart16/brenox/internal/db"
 	"github.com/brainart16/brenox/internal/authz"
+	db "github.com/brainart16/brenox/internal/db"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Service struct {
-	queries    *db.Queries
-	authz      *authz.Service
-	notifier   Notifier
-	attacher   AttachmentAttacher
-	billing    MessageBilling
+	queries     *db.Queries
+	authz       *authz.Service
+	notifier    Notifier
+	attacher    AttachmentAttacher
+	billing     MessageBilling
+	broadcaster MessageBroadcaster
+}
+
+// MessageBroadcaster publishes realtime events for messages created via REST.
+type MessageBroadcaster interface {
+	PublishMessageNew(workspaceID, channelID int64, message db.Message)
 }
 
 type MessageBilling interface {
@@ -52,6 +58,10 @@ func (s *Service) SetAttachmentAttacher(attacher AttachmentAttacher) {
 
 func (s *Service) SetBilling(billing MessageBilling) {
 	s.billing = billing
+}
+
+func (s *Service) SetBroadcaster(broadcaster MessageBroadcaster) {
+	s.broadcaster = broadcaster
 }
 
 func normalizeContent(content string, allowEmpty bool) (string, error) {
@@ -163,6 +173,10 @@ func (s *Service) SendMessage(
 
 	if s.billing != nil {
 		_ = s.billing.RecordMessageByWorkspaceID(ctx, workspaceID)
+	}
+
+	if s.broadcaster != nil {
+		s.broadcaster.PublishMessageNew(workspaceID, channelID, *message)
 	}
 
 	if s.notifier != nil {
