@@ -8,7 +8,7 @@ RUN go mod download
 
 COPY . .
 
-ARG VERSION=1.0.0
+ARG VERSION=1.1.0
 ARG COMMIT=unknown
 RUN CGO_ENABLED=0 GOOS=linux go build \
   -ldflags="-s -w \
