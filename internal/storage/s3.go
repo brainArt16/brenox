@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -13,6 +14,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
+
+// ObjectBody is a readable object from storage.
+type ObjectBody struct {
+	Body        io.ReadCloser
+	ContentType string
+	Size        int64
+}
 
 type Config struct {
 	Endpoint       string
@@ -184,6 +192,30 @@ func (c *Client) HeadObject(ctx context.Context, key string) (int64, string, err
 		contentType = *out.ContentType
 	}
 	return size, contentType, nil
+}
+
+func (c *Client) GetObject(ctx context.Context, key string) (*ObjectBody, error) {
+	out, err := c.client.GetObject(ctx, &s3.GetObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(key),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	size := int64(0)
+	if out.ContentLength != nil {
+		size = *out.ContentLength
+	}
+	contentType := ""
+	if out.ContentType != nil {
+		contentType = *out.ContentType
+	}
+	return &ObjectBody{
+		Body:        out.Body,
+		ContentType: contentType,
+		Size:        size,
+	}, nil
 }
 
 func envOr(key, fallback string) string {

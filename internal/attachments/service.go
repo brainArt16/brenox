@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path"
 	"regexp"
 	"strings"
@@ -33,6 +34,14 @@ type ObjectStore interface {
 	PresignPut(ctx context.Context, key, contentType string, size int64) (string, time.Time, error)
 	PresignGet(ctx context.Context, key string) (string, time.Time, error)
 	HeadObject(ctx context.Context, key string) (int64, string, error)
+	GetObject(ctx context.Context, key string) (*storage.ObjectBody, error)
+}
+
+type ContentOpen struct {
+	Body      io.ReadCloser
+	FileName  string
+	MimeType  string
+	SizeBytes int64
 }
 
 type VirusScanner interface {
@@ -157,7 +166,7 @@ func (s *Service) AttachToMessage(
 
 	created := make([]AttachmentResponse, 0, len(inputs))
 	for _, input := range inputs {
-		item, err := s.createAttachment(ctx, messageID, userID, input)
+		item, err := s.createAttachment(ctx, workspaceID, channelID, messageID, userID, input)
 		if err != nil {
 			return nil, err
 		}
@@ -184,7 +193,7 @@ func (s *Service) AttachOnMessageCreate(
 
 	created := make([]AttachmentResponse, 0, len(inputs))
 	for _, input := range inputs {
-		item, err := s.createAttachment(ctx, message.ID, userID, input)
+		item, err := s.createAttachment(ctx, workspaceID, channelID, message.ID, userID, input)
 		if err != nil {
 			return nil, err
 		}
@@ -221,18 +230,60 @@ func (s *Service) ListByMessage(
 
 	items := make([]AttachmentResponse, 0, len(rows))
 	for _, row := range rows {
-		item, err := s.toResponse(ctx, row)
-		if err != nil {
-			return nil, err
-		}
-		items = append(items, item)
+		items = append(items, s.toResponse(workspaceID, channelID, row))
 	}
 	return items, nil
 }
 
+func (s *Service) OpenContent(
+	ctx context.Context,
+	workspaceID, channelID, messageID, attachmentID, userID int64,
+) (*ContentOpen, error) {
+	if s.store == nil {
+		return nil, ErrStorageUnavailable
+	}
+	if err := s.access.AssertChannelAccess(ctx, workspaceID, channelID, userID); err != nil {
+		return nil, mapAccessError(err)
+	}
+
+	if _, err := s.queries.GetMessageInChannel(ctx, db.GetMessageInChannelParams{
+		ID:          messageID,
+		ChannelID:   channelID,
+		WorkspaceID: workspaceID,
+	}); err != nil {
+		return nil, ErrNotFound
+	}
+
+	row, err := s.queries.GetAttachmentByID(ctx, attachmentID)
+	if err != nil || row.MessageID != messageID {
+		return nil, ErrNotFound
+	}
+
+	obj, err := s.store.GetObject(ctx, row.ObjectKey)
+	if err != nil {
+		return nil, ErrObjectNotFound
+	}
+
+	mimeType := row.MimeType
+	if obj.ContentType != "" {
+		mimeType = obj.ContentType
+	}
+	size := row.SizeBytes
+	if obj.Size > 0 {
+		size = obj.Size
+	}
+
+	return &ContentOpen{
+		Body:      obj.Body,
+		FileName:  row.FileName,
+		MimeType:  mimeType,
+		SizeBytes: size,
+	}, nil
+}
+
 func (s *Service) createAttachment(
 	ctx context.Context,
-	messageID, userID int64,
+	workspaceID, channelID, messageID, userID int64,
 	input AttachmentInput,
 ) (AttachmentResponse, error) {
 	if s.store == nil {
@@ -272,27 +323,26 @@ func (s *Service) createAttachment(
 		return AttachmentResponse{}, err
 	}
 
-	return s.toResponse(ctx, row)
+	return s.toResponse(workspaceID, channelID, row), nil
 }
 
-func (s *Service) toResponse(ctx context.Context, row db.Attachment) (AttachmentResponse, error) {
-	url := ""
-	if s.store != nil {
-		signed, _, err := s.store.PresignGet(ctx, row.ObjectKey)
-		if err == nil {
-			url = signed
-		}
-	}
-
+func (s *Service) toResponse(workspaceID, channelID int64, row db.Attachment) AttachmentResponse {
 	return AttachmentResponse{
 		ID:        row.ID,
 		MessageID: row.MessageID,
 		FileName:  row.FileName,
 		MimeType:  row.MimeType,
 		SizeBytes: row.SizeBytes,
-		URL:       url,
+		URL:       contentURL(workspaceID, channelID, row.MessageID, row.ID),
 		CreatedAt: formatTime(row.CreatedAt),
-	}, nil
+	}
+}
+
+func contentURL(workspaceID, channelID, messageID, attachmentID int64) string {
+	return fmt.Sprintf(
+		"/api/workspaces/%d/channels/%d/messages/%d/attachments/%d/content",
+		workspaceID, channelID, messageID, attachmentID,
+	)
 }
 
 func (s *Service) messageUpdatedPayload(message db.Message, attachments []AttachmentResponse) map[string]any {

@@ -11,6 +11,7 @@
     { "key": "workspaceId", "value": "1" },
     { "key": "channelId", "value": "1" },
     { "key": "messageId", "value": "1" },
+    { "key": "attachmentId", "value": "1" },
     { "key": "callId", "value": "1" },
     { "key": "appId", "value": "1" },
     { "key": "apiKey", "value": "" },
@@ -377,7 +378,20 @@
               "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
             },
             "method": "GET",
-            "url": "{{baseUrl}}/api/workspaces/{{workspaceId}}/channels/{{channelId}}/messages/{{messageId}}/attachments"
+            "url": "{{baseUrl}}/api/workspaces/{{workspaceId}}/channels/{{channelId}}/messages/{{messageId}}/attachments",
+            "description": "Returns attachments. Each `url` is an authenticated API content path (not a direct storage URL)."
+          }
+        },
+        {
+          "name": "Download Attachment Content",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [{ "key": "token", "value": "{{token}}", "type": "string" }]
+            },
+            "method": "GET",
+            "url": "{{baseUrl}}/api/workspaces/{{workspaceId}}/channels/{{channelId}}/messages/{{messageId}}/attachments/{{attachmentId}}/content",
+            "description": "Streams file bytes through the API so clients never expose object-storage keys or presigned MinIO/S3 URLs."
           }
         },
         {

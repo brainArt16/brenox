@@ -2,8 +2,12 @@ package attachments
 
 import (
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"path"
 	"strconv"
+	"strings"
 
 	"github.com/brainart16/brenox/internal/httperr"
 	"github.com/gin-gonic/gin"
@@ -113,6 +117,55 @@ func (h *Handler) ListByMessage(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{"attachments": items})
 }
 
+func (h *Handler) DownloadContent(c *gin.Context) {
+	workspaceID, err := parseWorkspaceID(c)
+	if err != nil {
+		return
+	}
+	channelID, err := parseChannelID(c)
+	if err != nil {
+		return
+	}
+	messageID, err := parseMessageID(c)
+	if err != nil {
+		return
+	}
+	attachmentID, err := parseAttachmentID(c)
+	if err != nil {
+		return
+	}
+
+	userID := c.MustGet("user_id").(int64)
+	content, err := h.service.OpenContent(
+		c.Request.Context(),
+		workspaceID,
+		channelID,
+		messageID,
+		attachmentID,
+		userID,
+	)
+	if err != nil {
+		writeError(c, err)
+		return
+	}
+	defer content.Body.Close()
+
+	fileName := path.Base(content.FileName)
+	if fileName == "." || fileName == "/" {
+		fileName = "file"
+	}
+	safeName := strings.ReplaceAll(fileName, `"`, "")
+
+	c.Header("Content-Type", content.MimeType)
+	c.Header("Content-Disposition", fmt.Sprintf(`inline; filename="%s"`, safeName))
+	c.Header("Cache-Control", "private, max-age=300")
+	if content.SizeBytes > 0 {
+		c.Header("Content-Length", strconv.FormatInt(content.SizeBytes, 10))
+	}
+	c.Status(http.StatusOK)
+	_, _ = io.Copy(c.Writer, content.Body)
+}
+
 func parseWorkspaceID(c *gin.Context) (int64, error) {
 	workspaceID, err := strconv.ParseInt(c.Param("workspace_id"), 10, 64)
 	if err != nil {
@@ -138,6 +191,15 @@ func parseMessageID(c *gin.Context) (int64, error) {
 		return 0, err
 	}
 	return messageID, nil
+}
+
+func parseAttachmentID(c *gin.Context) (int64, error) {
+	attachmentID, err := strconv.ParseInt(c.Param("attachment_id"), 10, 64)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid attachment id"})
+		return 0, err
+	}
+	return attachmentID, nil
 }
 
 func writeError(c *gin.Context, err error) {

@@ -218,6 +218,7 @@ func main() {
 	workspaceAPI.GET("/channels/:id/messages", chatHandlerInstance.GetMessages)
 	workspaceAPI.POST("/channels/:id/messages/:message_id/attachments", attachmentHandler.AttachToMessage)
 	workspaceAPI.GET("/channels/:id/messages/:message_id/attachments", attachmentHandler.ListByMessage)
+	workspaceAPI.GET("/channels/:id/messages/:message_id/attachments/:attachment_id/content", attachmentHandler.DownloadContent)
 	workspaceAPI.POST("/channels/:id/calls", callsHandlerInstance.InitiateCall)
 
 	api.GET("/presence", presenceHandler.GetGlobalPresence)

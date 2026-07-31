@@ -184,7 +184,8 @@ All channel and message routes are scoped under a workspace.
 | POST | `/api/workspaces/:workspace_id/channels/:id/messages` | JWT | Send message (optional `attachments`) |
 | GET | `/api/workspaces/:workspace_id/channels/:id/messages` | JWT | Message history |
 | POST | `/api/workspaces/:workspace_id/channels/:id/messages/:message_id/attachments` | JWT | Attach files to message |
-| GET | `/api/workspaces/:workspace_id/channels/:id/messages/:message_id/attachments` | JWT | List message attachments (presigned URLs) |
+| GET | `/api/workspaces/:workspace_id/channels/:id/messages/:message_id/attachments` | JWT | List message attachments (`url` is API content path) |
+| GET | `/api/workspaces/:workspace_id/channels/:id/messages/:message_id/attachments/:attachment_id/content` | JWT | Stream attachment bytes (hides object-storage path) |
 | GET | `/api/notifications` | JWT | List notifications (`?limit=&offset=`) |
 | PATCH | `/api/notifications/:id/read` | JWT | Mark notification read |
 | POST | `/api/notifications/read-all` | JWT | Mark all notifications read |
